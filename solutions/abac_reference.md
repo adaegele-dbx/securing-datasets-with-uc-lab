@@ -13,6 +13,32 @@ Instead of attaching a mask/filter to each column or table by hand, you:
 
 One policy can replace hundreds of per-table `ALTER` statements, and coverage follows your data.
 
+ABAC does **both** fine-grained controls — column masks *and* row filters — each driven by a tag:
+
+```sql
+-- Column-mask policy: mask any column tagged pii=email
+CREATE POLICY mask_pii_email
+ON SCHEMA <schema>
+COLUMN MASK <schema>.email_mask
+TO `account users`
+FOR TABLES
+MATCH COLUMNS has_tag_value('pii', 'email') AS c
+ON COLUMN c;
+
+-- Row-filter policy: filter any table that has a column tagged rls=region.
+-- MATCH COLUMNS selects the tagged column; USING COLUMNS feeds its value to the filter function.
+CREATE POLICY filter_by_region
+ON SCHEMA <schema>
+ROW FILTER <schema>.region_scope
+TO `account users`
+FOR TABLES
+MATCH COLUMNS has_tag_value('rls', 'region') AS reg
+USING COLUMNS (reg);
+```
+
+You can also add a `WHEN has_tag_value('sensitivity','high')` clause to a row-filter policy to
+restrict *which tables* it applies to (a table-level tag), on top of the column match.
+
 ## Ordinary tags vs. governed tags
 
 | | Ordinary tag | Governed tag |

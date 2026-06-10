@@ -67,20 +67,27 @@ SET allowed_region = 'ALL' WHERE user_email = current_user();
 
 ## Part 4 — ABAC
 
-Governed tag `pii` (allowed values `ssn`, `email`) must be created first in **Catalog Explorer →
-Governed tags** — there is no SQL DDL for governed tags.
+Two governed tags must be created first in **Catalog Explorer → Governed tags** (there is no SQL
+DDL for governed tags): `pii` (allowed values `ssn`, `email`) and `rls` (allowed value `region`).
+
+### Column-mask policy (partial email mask)
 
 ```sql
--- Tag a column with the governed tag
+-- Tag the column with the governed tag
 ALTER TABLE workspace.uc_security_lab.employees ALTER COLUMN email SET TAGS ('pii' = 'email');
 
--- One policy that masks every column tagged pii=email across the schema
-CREATE OR REPLACE FUNCTION workspace.uc_security_lab.pii_redact(value STRING)
-RETURN '*** REDACTED ***';
+-- Partial mask: keep first char + domain, hide the rest (a****@domain)
+CREATE OR REPLACE FUNCTION workspace.uc_security_lab.email_mask(value STRING)
+RETURN CASE
+  WHEN value IS NULL THEN NULL
+  WHEN instr(value, '@') = 0 THEN '****'
+  ELSE concat(substring(value, 1, 1), '****@', substring(value, instr(value, '@') + 1))
+END;
 
+-- One policy masks every column tagged pii=email across the schema
 CREATE POLICY mask_pii_email
 ON SCHEMA workspace.uc_security_lab
-COLUMN MASK workspace.uc_security_lab.pii_redact
+COLUMN MASK workspace.uc_security_lab.email_mask
 TO `account users`
 FOR TABLES
 MATCH COLUMNS has_tag_value('pii', 'email') AS c
@@ -90,9 +97,37 @@ ON COLUMN c;
 CREATE OR REPLACE TABLE workspace.uc_security_lab.contractors (contractor_id INT, contact_email STRING);
 INSERT INTO workspace.uc_security_lab.contractors VALUES (1, 'jordan.vance@northwind.example');
 ALTER TABLE workspace.uc_security_lab.contractors ALTER COLUMN contact_email SET TAGS ('pii' = 'email');
-SELECT * FROM workspace.uc_security_lab.contractors;   -- contact_email is redacted
+SELECT * FROM workspace.uc_security_lab.contractors;   -- contact_email is masked
+```
 
-SHOW POLICIES ON SCHEMA workspace.uc_security_lab;
+### Row-filter policy (region scoping)
+
+```sql
+-- Row filter function: boolean per row, honors 'ALL'
+CREATE OR REPLACE FUNCTION workspace.uc_security_lab.region_scope(region STRING)
+RETURN EXISTS (
+  SELECT 1 FROM workspace.uc_security_lab.analyst_access a
+  WHERE a.user_email = current_user()
+    AND (a.allowed_region = region OR a.allowed_region = 'ALL')
+);
+
+-- Tag the region column (departments has no manual row filter, so no conflict)
+ALTER TABLE workspace.uc_security_lab.departments ALTER COLUMN region SET TAGS ('rls' = 'region');
+
+-- One policy filters rows on every table with a column tagged rls=region
+CREATE POLICY filter_by_region
+ON SCHEMA workspace.uc_security_lab
+ROW FILTER workspace.uc_security_lab.region_scope
+TO `account users`
+FOR TABLES
+MATCH COLUMNS has_tag_value('rls', 'region') AS reg
+USING COLUMNS (reg);
+
+-- Narrow entitlement to see it scope (only EMEA departments remain)
+UPDATE workspace.uc_security_lab.analyst_access SET allowed_region = 'EMEA' WHERE user_email = current_user();
+SELECT dept_id, dept_name, region FROM workspace.uc_security_lab.departments ORDER BY dept_id;
+
+SHOW POLICIES ON SCHEMA workspace.uc_security_lab;   -- shows both policies
 ```
 
 ## Cleanup
@@ -100,6 +135,7 @@ SHOW POLICIES ON SCHEMA workspace.uc_security_lab;
 ```sql
 -- Note: DROP POLICY does not support IF EXISTS.
 DROP POLICY mask_pii_email ON SCHEMA workspace.uc_security_lab;
+DROP POLICY filter_by_region ON SCHEMA workspace.uc_security_lab;
 ALTER TABLE workspace.uc_security_lab.employees    ALTER COLUMN ssn         DROP MASK;
 ALTER TABLE workspace.uc_security_lab.compensation ALTER COLUMN base_salary DROP MASK;
 ALTER TABLE workspace.uc_security_lab.compensation ALTER COLUMN bonus       DROP MASK;

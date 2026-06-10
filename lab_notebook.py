@@ -396,8 +396,17 @@
 # MAGIC same `analyst_access` table: a user sees a row if `allowed_region` matches that row's region
 # MAGIC (or is `'ALL'`).
 # MAGIC
-# MAGIC > **In production** this filter would typically check a group or a per-user mapping table the
-# MAGIC > same way — e.g. `is_account_group_member('region_amer')`.
+# MAGIC > **In production** this filter would check **group membership** instead of a control table —
+# MAGIC > one group per region, and an admin group that sees everything:
+# MAGIC > ```sql
+# MAGIC > CREATE FUNCTION region_filter(region STRING) RETURN
+# MAGIC >   is_account_group_member('hr_admins')                          -- HR admins see all regions
+# MAGIC >   OR is_account_group_member(concat('region_', lower(region))); -- else only your region's group
+# MAGIC > ```
+# MAGIC > With that version, a user in the `region_amer` group sees only AMER rows, and `hr_admins`
+# MAGIC > members see everything — no per-user table to maintain. We use the `analyst_access` table
+# MAGIC > below only so you can watch the effect change **instantly** (recall: group-membership
+# MAGIC > changes are cached and take minutes to register).
 
 # COMMAND ----------
 
@@ -472,15 +481,38 @@
 # MAGIC every matching column across the whole schema — *including tables created later*.
 # MAGIC
 # MAGIC ### ⚠️ A gotcha first
-# MAGIC A column can have **either** a manually-applied mask (Part 2) **or** an ABAC policy mask —
-# MAGIC **not both** (they'd conflict). So for ABAC we'll target a column with *no* manual mask:
-# MAGIC **`email`**. (Row filters and column masks, on the other hand, happily coexist — you saw that
-# MAGIC in Part 3.) Filter/mask functions run at **query time**, every time.
+# MAGIC The same object can have **either** a manually-applied control (Part 2/3) **or** an ABAC
+# MAGIC policy — **not both** (they'd conflict). So in this Part we apply ABAC to objects with no
+# MAGIC manual control yet:
+# MAGIC - the **`email`** column (no manual mask) → column-mask policy, and
+# MAGIC - the **`departments`** table (no manual row filter) → row-filter policy.
+# MAGIC
+# MAGIC `employees` already has a manual mask on `ssn` and a manual row filter, so we leave it alone
+# MAGIC here. Mask and filter functions run at **query time**, every time.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4a. Ordinary tags vs. governed tags — and why it matters here
+# MAGIC ### 4a. The building blocks of ABAC
+# MAGIC
+# MAGIC ABAC has four moving parts — worth naming before we build:
+# MAGIC
+# MAGIC | Piece | What it is | In this lab |
+# MAGIC |-------|-----------|-------------|
+# MAGIC | **Governed tag** | A centrally-defined *attribute* (key + allowed values) attached to columns/tables | `pii = email`, `rls = region` |
+# MAGIC | **UC function** | A SQL UDF doing the work — a **column mask** (returns a value) or a **row filter** (returns true/false) | `email_mask(...)`, `region_scope(...)` |
+# MAGIC | **ABAC policy** | A rule binding the two: *"apply this function to every object matching this tag"* | `mask_pii_email`, `filter_by_region` |
+# MAGIC | **Principals** (`TO`) | Who the policy applies to — users/groups, with optional `EXCEPT` | `account users` |
+# MAGIC
+# MAGIC The policy's **`MATCH COLUMNS has_tag_value(...)`** clause is the key idea: instead of naming a
+# MAGIC column, it selects *any* column carrying the tag — so one policy covers the whole schema and
+# MAGIC every table you add later. The flow is always **tag → policy → function**, evaluated at query
+# MAGIC time.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 4b. Ordinary tags vs. governed tags — and why it matters here
 # MAGIC
 # MAGIC Both are key–value pairs you attach to columns/tables. The difference is governance:
 # MAGIC
@@ -498,27 +530,26 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4b. 🖱️ Create a governed tag in the UI (one-time)
+# MAGIC ### 4c. 🖱️ Create the governed tags in the UI (one-time)
 # MAGIC
-# MAGIC Governed tags are created in **Catalog Explorer** (there's no SQL command for it). Do this once:
+# MAGIC Governed tags are created in **Catalog Explorer** (there's no SQL command for it). Create the
+# MAGIC **two** tags this Part uses:
 # MAGIC
 # MAGIC 1. In the left sidebar, click **Catalog**.
-# MAGIC 2. Click the **Governed tags** button (gear/tag icon near the top of the Catalog pane), then
-# MAGIC    **Create governed tag**.
-# MAGIC 3. **Tag key:** `pii`
-# MAGIC 4. **Allowed values:** add `ssn` and `email`.
-# MAGIC 5. Save.
+# MAGIC 2. Click the **Governed tags** button (near the top of the Catalog pane) → **Create governed tag**.
+# MAGIC 3. Create the first tag — **key:** `pii`, **allowed values:** `ssn`, `email`. Save.
+# MAGIC 4. Create a second tag — **key:** `rls`, **allowed value:** `region`. Save.
 # MAGIC
 # MAGIC > As the workspace admin you have permission to do this in Free Edition. In a larger
 # MAGIC > organization, a governance admin defines these tags once for everyone — that's the whole
 # MAGIC > point of *governed* tags.
 # MAGIC
-# MAGIC When the tag exists, run the next cell.
+# MAGIC When both tags exist, run the next cell.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4c. Tag the sensitive column
+# MAGIC ### 4d. Tag the sensitive column
 # MAGIC Apply the governed tag `pii = email` to `employees.email`. (You can also do this in the UI on
 # MAGIC the column's page — but SQL is faster to show here.)
 
@@ -531,23 +562,29 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4d. Write ONE policy for everything tagged `pii = email`
-# MAGIC First a mask function the policy will use, then the policy itself. `MATCH COLUMNS
-# MAGIC has_tag_value('pii','email')` is what makes this apply to **every** matching column in the
-# MAGIC schema rather than one named column.
+# MAGIC ### 4e. Write ONE policy for everything tagged `pii = email`
+# MAGIC First the mask function, then the policy. Rather than blank out the field, this mask is
+# MAGIC **partial** — it keeps the first character and the domain (useful for analytics) and hides
+# MAGIC the rest, e.g. `ana.reyes@northwind.example` → `a****@northwind.example`. `MATCH COLUMNS
+# MAGIC has_tag_value('pii','email')` is what makes the policy apply to **every** matching column in
+# MAGIC the schema rather than one named column.
 
 # COMMAND ----------
 
 # MAGIC %sql
-# MAGIC CREATE OR REPLACE FUNCTION workspace.uc_security_lab.pii_redact(value STRING)
-# MAGIC RETURN '*** REDACTED ***'
+# MAGIC CREATE OR REPLACE FUNCTION workspace.uc_security_lab.email_mask(value STRING)
+# MAGIC RETURN CASE
+# MAGIC   WHEN value IS NULL THEN NULL
+# MAGIC   WHEN instr(value, '@') = 0 THEN '****'
+# MAGIC   ELSE concat(substring(value, 1, 1), '****@', substring(value, instr(value, '@') + 1))
+# MAGIC END
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC CREATE POLICY mask_pii_email
 # MAGIC ON SCHEMA workspace.uc_security_lab
-# MAGIC COLUMN MASK workspace.uc_security_lab.pii_redact
+# MAGIC COLUMN MASK workspace.uc_security_lab.email_mask
 # MAGIC TO `account users`
 # MAGIC FOR TABLES
 # MAGIC MATCH COLUMNS has_tag_value('pii', 'email') AS c
@@ -556,9 +593,9 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4e. ▶️ See the policy applied
-# MAGIC Query `employees` — the `email` column is now `*** REDACTED ***`, applied by the policy (not
-# MAGIC by any per-column `ALTER` we wrote).
+# MAGIC ### 4f. ▶️ See the policy applied
+# MAGIC Query `employees` — the `email` column now shows the **partial mask** (`a****@…`), applied by
+# MAGIC the policy, not by any per-column `ALTER` we wrote.
 
 # COMMAND ----------
 
@@ -571,7 +608,7 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4f. ▶️ Tag once, protect everywhere
+# MAGIC ### 4g. ▶️ Tag once, protect everywhere
 # MAGIC Here's the payoff. Create a **brand-new** table, tag its email column with the **same**
 # MAGIC governed tag, and query it — **no new policy, no `ALTER ... SET MASK`**. The existing policy
 # MAGIC already covers it.
@@ -604,13 +641,89 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC `contact_email` came back redacted automatically. **That** is the power of ABAC: govern by
+# MAGIC `contact_email` came back masked automatically. **That** is the power of ABAC: govern by
 # MAGIC *attribute*, and coverage follows your data without per-table work.
 
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 4g. Inspect the policies in the schema
+# MAGIC ### 4h. ABAC can filter rows too — not just mask columns
+# MAGIC A column-mask policy hides *values*; a **row-filter policy** hides whole *rows*, again driven
+# MAGIC by a tag. We'll scope the `departments` table by region. The function is richer than the
+# MAGIC constant-style mask — it returns a boolean per row from your entitlement (and honors `'ALL'`):
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE OR REPLACE FUNCTION workspace.uc_security_lab.region_scope(region STRING)
+# MAGIC RETURN EXISTS (
+# MAGIC   SELECT 1 FROM workspace.uc_security_lab.analyst_access a
+# MAGIC   WHERE a.user_email = current_user()
+# MAGIC     AND (a.allowed_region = region OR a.allowed_region = 'ALL')
+# MAGIC )
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Tag the `region` column of `departments` with the second governed tag, `rls = region`:
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC ALTER TABLE workspace.uc_security_lab.departments
+# MAGIC   ALTER COLUMN region SET TAGS ('rls' = 'region')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Now one row-filter policy covers any table with a column tagged `rls = region`. `MATCH COLUMNS`
+# MAGIC selects the tagged column and `USING COLUMNS` feeds its value to the filter function:
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC CREATE POLICY filter_by_region
+# MAGIC ON SCHEMA workspace.uc_security_lab
+# MAGIC ROW FILTER workspace.uc_security_lab.region_scope
+# MAGIC TO `account users`
+# MAGIC FOR TABLES
+# MAGIC MATCH COLUMNS has_tag_value('rls', 'region') AS reg
+# MAGIC USING COLUMNS (reg)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 4i. ▶️ See the row-filter policy scope your rows
+# MAGIC You currently have `allowed_region = 'ALL'`, so all 6 departments show. Narrow it to a single
+# MAGIC region and re-run — only that region's departments remain. (`employees` is untouched by this
+# MAGIC policy — its `region` column isn't tagged `rls`, and it already has a manual row filter.)
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC UPDATE workspace.uc_security_lab.analyst_access
+# MAGIC SET allowed_region = 'EMEA'
+# MAGIC WHERE user_email = current_user()
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC SELECT dept_id, dept_name, region
+# MAGIC FROM workspace.uc_security_lab.departments
+# MAGIC ORDER BY dept_id
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC Only the **EMEA** departments remain — the row-filter policy is enforcing your entitlement via
+# MAGIC the tag, with no `ALTER TABLE ... SET ROW FILTER` on `departments` at all.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 4j. Inspect the policies in the schema
+# MAGIC You should see **both** policies — `mask_pii_email` (column mask) and `filter_by_region`
+# MAGIC (row filter).
 
 # COMMAND ----------
 
@@ -651,13 +764,14 @@
 
 # MAGIC %md
 # MAGIC ### 🧹 Cleanup (run this to reclaim Free Edition quota)
-# MAGIC Drops the policy, masks, row filter, and the entire lab schema. Safe to re-run.
+# MAGIC Drops both ABAC policies, the masks, the row filter, and the entire lab schema. Safe to re-run.
 
 # COMMAND ----------
 
 cleanup_statements = [
     # DROP POLICY does not support IF EXISTS; the try/except below handles "not found".
     "DROP POLICY mask_pii_email ON SCHEMA workspace.uc_security_lab",
+    "DROP POLICY filter_by_region ON SCHEMA workspace.uc_security_lab",
     "ALTER TABLE workspace.uc_security_lab.employees ALTER COLUMN ssn DROP MASK",
     "ALTER TABLE workspace.uc_security_lab.compensation ALTER COLUMN base_salary DROP MASK",
     "ALTER TABLE workspace.uc_security_lab.compensation ALTER COLUMN bonus DROP MASK",
@@ -671,4 +785,4 @@ for stmt in cleanup_statements:
     except Exception as e:
         print(f"SKIPPED ({stmt}): {e}")
 
-print("\nCleanup complete. (The governed tag 'pii' remains — delete it in Catalog Explorer if you wish.)")
+print("\nCleanup complete. (The governed tags 'pii' and 'rls' remain — delete them in Catalog Explorer if you wish.)")
