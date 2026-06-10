@@ -29,11 +29,13 @@
 # MAGIC - This repo cloned as a **Git folder** (`Workspace` → `Create` → `Git folder`).
 # MAGIC
 # MAGIC > **Free Edition notes**
-# MAGIC > - You are the **only user** and a **workspace admin**. Normally you'd test access control
-# MAGIC >   by logging in as a *different* user or toggling *group* membership — but Free Edition
-# MAGIC >   has no account console to create groups or users. So in Parts 2–3 we make enforcement
-# MAGIC >   visible a different way: a small **`analyst_access` control table** that you grant
-# MAGIC >   yourself access in, then re-run the query and watch the result change.
+# MAGIC > - You are the **only user** and a **workspace admin**. You *can* create groups (and in
+# MAGIC >   production you'd grant access to groups, not individuals), but you can't log in as a
+# MAGIC >   second user — and a **group-membership change is cached and can take several minutes
+# MAGIC >   (and a new compute session) to take effect**. That's too slow to watch live. So in
+# MAGIC >   Parts 2–3 we drive enforcement from a small **`analyst_access` control table** keyed on
+# MAGIC >   your identity: you add a row, re-run the query, and the result changes **instantly**.
+# MAGIC >   (A control/mapping table like this is also a legitimate production pattern.)
 # MAGIC > - Your catalog is named **`workspace`** — every table below lives in
 # MAGIC >   `workspace.uc_security_lab`.
 # MAGIC > - Free Edition has a **daily compute quota**. The lab is lightweight, and the final cell
@@ -107,8 +109,10 @@
 # MAGIC
 # MAGIC **4. Principals** you grant to are **users**, **service principals**, and **groups**. In
 # MAGIC production you almost always grant to **groups** (e.g. `hr_analysts`), never individuals —
-# MAGIC it's the only thing that scales. (Free Edition can't create groups, so today we'll use the
-# MAGIC built-in `account users` group and your own identity.)
+# MAGIC it's the only thing that scales. Free Edition *can* create groups
+# MAGIC (**Settings → Identity and access → Groups**), and the grant examples below work the same
+# MAGIC against a group you create. We'll use the built-in **`account users`** group so the cells run
+# MAGIC without a detour.
 
 # COMMAND ----------
 
@@ -137,21 +141,51 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ### 1c. Grant and revoke a privilege
+# MAGIC ### 1c. `SELECT` alone is not enough — you also need `USE CATALOG` and `USE SCHEMA`
 # MAGIC
-# MAGIC Let's grant **`SELECT`** on the `employees` table to the built-in **`account users`** group,
-# MAGIC inspect it, then revoke it. (In a real deployment you'd grant to a purpose-built group like
-# MAGIC `hr_analysts`.)
+# MAGIC > ⚠️ **This trips people up constantly.** Granting `SELECT` on a table does **not**, by
+# MAGIC > itself, let someone read it. To reach any object, a principal needs **traversal**
+# MAGIC > privileges down the hierarchy first:
+# MAGIC >
+# MAGIC > | Privilege | Granted on | Why it's needed |
+# MAGIC > |-----------|------------|-----------------|
+# MAGIC > | `USE CATALOG` | the **catalog** | "see into" the catalog |
+# MAGIC > | `USE SCHEMA` | the **schema** | "see into" the schema |
+# MAGIC > | `SELECT` | the **table** | actually read the data |
+# MAGIC >
+# MAGIC > Miss `USE CATALOG` or `USE SCHEMA` and the user gets a permission error even with `SELECT`.
+# MAGIC > As the owner you already have all three, which is why your queries work. This layered
+# MAGIC > requirement *is* the **principle of least privilege** — access is granted explicitly at
+# MAGIC > each level, nothing is implied.
 # MAGIC
-# MAGIC > **Two privileges are needed to read data:** traversal (`USE CATALOG`, `USE SCHEMA`) to
-# MAGIC > "see" the container, plus `SELECT` on the data itself. As owner you already have both;
-# MAGIC > a new group would need `USE CATALOG`/`USE SCHEMA` too. This is the **principle of least
-# MAGIC > privilege** — grant only what's required, at the narrowest scope.
+# MAGIC Let's grant the **full chain** to the built-in **`account users`** group, inspect it, then
+# MAGIC revoke it.
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC GRANT USE CATALOG ON CATALOG workspace TO `account users`
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC GRANT USE SCHEMA ON SCHEMA workspace.uc_security_lab TO `account users`
 
 # COMMAND ----------
 
 # MAGIC %sql
 # MAGIC GRANT SELECT ON TABLE workspace.uc_security_lab.employees TO `account users`
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC `SHOW GRANTS` on the table lists the `SELECT` grant. The `USE CATALOG` / `USE SCHEMA` grants
+# MAGIC live on the catalog and schema — try `SHOW GRANTS ON SCHEMA workspace.uc_security_lab`.
+# MAGIC
+# MAGIC > 💡 **Groups in practice:** here we used the built-in `account users` group. In production
+# MAGIC > you'd create a purpose-built group like `hr_analysts` (**Settings → Identity and access →
+# MAGIC > Groups**, available in Free Edition) and grant this same chain to it — so access follows
+# MAGIC > the group, not individuals.
 
 # COMMAND ----------
 
@@ -173,8 +207,23 @@
 
 # COMMAND ----------
 
+# MAGIC %md
+# MAGIC Now revoke the full chain to return to deny-by-default.
+
+# COMMAND ----------
+
 # MAGIC %sql
 # MAGIC REVOKE SELECT ON TABLE workspace.uc_security_lab.employees FROM `account users`
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC REVOKE USE SCHEMA ON SCHEMA workspace.uc_security_lab FROM `account users`
+
+# COMMAND ----------
+
+# MAGIC %sql
+# MAGIC REVOKE USE CATALOG ON CATALOG workspace FROM `account users`
 
 # COMMAND ----------
 
@@ -205,9 +254,13 @@
 # MAGIC CREATE FUNCTION ssn_mask(ssn STRING) RETURN
 # MAGIC   CASE WHEN is_account_group_member('hr_admins') THEN ssn ELSE 'XXX-XX-XXXX' END;
 # MAGIC ```
-# MAGIC We can't create groups in Free Edition, so instead our mask reads the **`analyst_access`
-# MAGIC control table** keyed on `current_user()`. Same idea — the function decides — but we can
-# MAGIC drive it by editing a table, with a single user.
+# MAGIC We'll use a small twist so you can **see the effect change live**. Free Edition lets you
+# MAGIC create groups, but a group-membership change is cached and takes minutes (and a new compute
+# MAGIC session) to register — you couldn't watch it flip. So instead our mask reads the
+# MAGIC **`analyst_access` control table** keyed on `current_user()`: same idea (a function decides),
+# MAGIC but you can toggle it by editing one row and see the result **instantly**. Swapping the
+# MAGIC `EXISTS (...)` check for `is_account_group_member('hr_admins')` is all it takes to use groups
+# MAGIC in production.
 
 # COMMAND ----------
 

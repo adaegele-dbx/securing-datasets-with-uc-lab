@@ -41,9 +41,11 @@ This is why the lab has you create the governed tag `pii` in the UI before writi
 
 ## The production pattern (groups instead of a control table)
 
-In the lab, mask/filter functions read the `analyst_access` table keyed on `current_user()`
-because Free Edition can't create groups. In a real workspace you'd gate on **group membership**
-instead — no control table needed:
+In the lab, mask/filter functions read the `analyst_access` table keyed on `current_user()` so the
+effect can be toggled and seen **instantly**. (Free Edition *can* create groups, but a
+group-membership change is cached and takes minutes plus a new compute session to register — too
+slow to demo live.) In a real workspace you'd gate on **group membership** instead — no control
+table needed:
 
 ```sql
 -- Column mask: only HR admins see real SSNs

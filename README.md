@@ -28,9 +28,10 @@ three regions (AMER, EMEA, APAC).
   create a governed tag in Part 4
 
 > ⚠️ **Free Edition notes**
-> - You're the only user and have no account console, so you can't create groups/users. Parts 2–3
->   make access control visible instead via a small **control table** you toggle. Each fine-grained
->   section also shows the **production, group-based** pattern you'd use at work.
+> - You're the only user, and although Free Edition lets you create groups, you can't log in as a
+>   second user and group-membership changes are cached (minutes + a new session to take effect).
+>   So Parts 2–3 make access control visible via a small **control table** you toggle and see flip
+>   **instantly**. Each fine-grained section also shows the **production, group-based** pattern.
 > - Your catalog is `workspace`; the lab uses the schema `workspace.uc_security_lab`.
 > - Free Edition has a **daily compute quota**. The lab is lightweight and ends with a cleanup
 >   cell. If compute stops responding, you may have hit the quota — pick up after it resets.

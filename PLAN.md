@@ -17,10 +17,14 @@ Setup → Part 1 (model: hierarchy, ownership, GRANT/REVOKE, deny-by-default, Ca
 MANAGE) → Part 2 (column masks) → Part 3 (row filters) → Part 4 (ABAC) → wrap-up + cleanup.
 
 ## Free Edition constraints (the design drivers)
-- **No account console / account API** → can't create groups or service principals, so the usual
-  "log in as another user / toggle group membership" demo is impossible.
-- **Single user, workspace admin.** Catalog is always `workspace`. Serverless only; one 2X-Small
-  warehouse; daily compute quota.
+- **Single user.** You can't log in as a second principal, so "have another user query it" is out.
+- **Groups exist but membership is cached.** Free Edition *can* create groups (Settings → Identity
+  and access → Groups, and via SCIM API), but `is_account_group_member()` is evaluated against a
+  cached membership snapshot — a membership change takes minutes + a new compute session to
+  register (measured: still `false` 2+ min after adding self). So toggling group membership is
+  unusable for a live "watch it flip" demo. A control table flips instantly.
+- **Workspace admin.** Catalog is always `workspace`. Serverless only; one 2X-Small warehouse;
+  daily compute quota.
 
 ## Key design decisions
 - **Visible enforcement for one user:** row filters & column masks read the `analyst_access`
