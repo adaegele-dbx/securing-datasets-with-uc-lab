@@ -1,0 +1,7 @@
+.DS_Store
+__pycache__/
+*.pyc
+.databricks/
+
+# Internal design/process artifacts — not part of the published lab
+docs/superpowers/
