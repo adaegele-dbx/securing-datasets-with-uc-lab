@@ -741,28 +741,6 @@
 # COMMAND ----------
 
 # MAGIC %md
-# MAGIC ---
-# MAGIC ## Wrap-up
-# MAGIC
-# MAGIC You secured a dataset across four levels:
-# MAGIC
-# MAGIC | Mechanism | Protects | Use it when |
-# MAGIC |-----------|----------|-------------|
-# MAGIC | **`GRANT` / `REVOKE`** | Whole catalogs / schemas / tables | Deciding *who can touch a dataset at all* — your baseline |
-# MAGIC | **Column mask** | Specific columns | A few sensitive columns on a few tables |
-# MAGIC | **Row filter** | Specific rows | Users should see only their slice (region, dept, tenant) |
-# MAGIC | **ABAC policy + governed tags** | Everything tagged, across the estate | Protecting PII consistently at scale, including future tables |
-# MAGIC
-# MAGIC ### What to try at work (beyond Free Edition)
-# MAGIC - Grant to **groups**, not users — the only thing that scales.
-# MAGIC - Let **data classification** auto-tag PII so ABAC covers it automatically (see the note below).
-# MAGIC - **Verify & audit** your controls: `SHOW POLICIES`, and the `system.access.audit` system
-# MAGIC   table for "who queried what."
-# MAGIC - Explore **lineage** to see where sensitive columns flow downstream.
-
-# COMMAND ----------
-
-# MAGIC %md
 # MAGIC ### 📌 The missing piece at scale: data classification
 # MAGIC
 # MAGIC In Part 4 you tagged the `email` column by hand. That's fine for a lab, but in a real estate
@@ -787,6 +765,28 @@
 # MAGIC
 # MAGIC The pattern is the takeaway: **classification tags your data → ABAC policies enforce on those
 # MAGIC tags.** Together they keep a growing data estate protected without per-table babysitting.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ---
+# MAGIC ## Wrap-up
+# MAGIC
+# MAGIC You secured a dataset across four levels:
+# MAGIC
+# MAGIC | Mechanism | Protects | Use it when |
+# MAGIC |-----------|----------|-------------|
+# MAGIC | **`GRANT` / `REVOKE`** | Whole catalogs / schemas / tables | Deciding *who can touch a dataset at all* — your baseline |
+# MAGIC | **Column mask** | Specific columns | A few sensitive columns on a few tables |
+# MAGIC | **Row filter** | Specific rows | Users should see only their slice (region, dept, tenant) |
+# MAGIC | **ABAC policy + governed tags** | Everything tagged, across the estate | Protecting PII consistently at scale, including future tables |
+# MAGIC
+# MAGIC ### What to try at work (beyond Free Edition)
+# MAGIC - Grant to **groups**, not users — the only thing that scales.
+# MAGIC - Let **data classification** auto-tag PII so ABAC covers it automatically (see the note above).
+# MAGIC - **Verify & audit** your controls: `SHOW POLICIES`, and the `system.access.audit` system
+# MAGIC   table for "who queried what."
+# MAGIC - Explore **lineage** to see where sensitive columns flow downstream.
 
 # COMMAND ----------
 
