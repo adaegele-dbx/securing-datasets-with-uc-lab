@@ -755,10 +755,38 @@
 # MAGIC
 # MAGIC ### What to try at work (beyond Free Edition)
 # MAGIC - Grant to **groups**, not users — the only thing that scales.
-# MAGIC - Define **governed tags** centrally and let **data classification** auto-tag PII.
+# MAGIC - Let **data classification** auto-tag PII so ABAC covers it automatically (see the note below).
 # MAGIC - **Verify & audit** your controls: `SHOW POLICIES`, and the `system.access.audit` system
 # MAGIC   table for "who queried what."
 # MAGIC - Explore **lineage** to see where sensitive columns flow downstream.
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ### 📌 The missing piece at scale: data classification
+# MAGIC
+# MAGIC In Part 4 you tagged the `email` column by hand. That's fine for a lab, but in a real estate
+# MAGIC with thousands of tables, **tagging is the bottleneck** — and a forgotten tag is an unprotected
+# MAGIC column. **Unity Catalog data classification** automates that step: it scans your data and
+# MAGIC applies governed tags for you, so the ABAC policies you already wrote start protecting columns
+# MAGIC the moment they're discovered.
+# MAGIC
+# MAGIC > ⚠️ **Data classification isn't available in Free Edition** — so you can't run it here. This
+# MAGIC > is how it works in a full workspace.
+# MAGIC
+# MAGIC - **Built-in classifiers + system tags.** UC ships with classifiers for common sensitive data
+# MAGIC   — SSNs, emails, names, phone numbers, credit cards, and more — that apply standard **system
+# MAGIC   governed tags** (the `class.*` tags, e.g. `class.us_ssn`, `class.email_address`). Point them
+# MAGIC   at your data and PII gets tagged consistently, no manual effort.
+# MAGIC - **Custom classifiers (Beta).** You can define your **own** classifiers — matching patterns or
+# MAGIC   column characteristics specific to your business — to apply your **own custom governed tags**
+# MAGIC   (like the `pii` tag you made) at scale.
+# MAGIC - **Automated or on-demand.** Run classification **automatically** across a whole **catalog or
+# MAGIC   schema** so new and changed data is tagged continuously, **or** run it **on demand**, review
+# MAGIC   the proposed tags, and adjust before accepting them.
+# MAGIC
+# MAGIC The pattern is the takeaway: **classification tags your data → ABAC policies enforce on those
+# MAGIC tags.** Together they keep a growing data estate protected without per-table babysitting.
 
 # COMMAND ----------
 

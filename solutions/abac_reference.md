@@ -106,7 +106,14 @@ ON COLUMN c;
 - Policy and mask/filter functions are evaluated at **query time**, on every read.
 
 ## Going further at enterprise scale
-- Let **data classification** auto-detect and tag PII so policies cover new data with no manual
-  tagging.
+- **Data classification** automates the *tagging* step (not available in Free Edition):
+  - **Built-in classifiers** detect common PII (SSN, email, name, phone, credit card, …) and apply
+    standard **system governed tags** — the `class.*` tags such as `class.us_ssn`,
+    `class.email_address`.
+  - **Custom classifiers (Beta)** let you define your own detection rules to apply your own custom
+    governed tags (like `pii`) at scale.
+  - Runs **automatically over a catalog or schema** (continuous), or **on demand** so you can
+    review proposed tags and adjust before accepting. Either way, the ABAC policies you wrote
+    enforce on whatever gets tagged.
 - Audit enforcement with `SHOW POLICIES` and the `system.access.audit` system table.
 - Define governed tags and policies at the **catalog** level so whole domains are covered at once.
